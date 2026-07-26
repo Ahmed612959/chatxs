@@ -11,6 +11,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         :root {
             --bg: #0a0e1a; --bg-2: #131827; --bg-glass: rgba(19, 24, 39, 0.75); --bg-glass-heavy: rgba(10, 14, 26, 0.95);
@@ -312,8 +314,20 @@
             position: absolute; top: 9px; left: 40px; font-size: 10px; color: var(--text-3);
             text-transform: uppercase; letter-spacing: 0.5px;
         }
-        .msg-bubble table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
-        .msg-bubble table th, .msg-bubble table td { padding: 6px 10px; border: 1px solid var(--border); font-size: 12.5px; }
+        .table-wrap {
+            max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+            margin: 8px 0; border: 1px solid var(--border); border-radius: 10px;
+        }
+        .msg-bubble table { border-collapse: collapse; width: 100%; min-width: 340px; table-layout: auto; }
+        .msg-bubble table th, .msg-bubble table td {
+            padding: 8px 12px; border: 1px solid var(--border); font-size: 12.5px;
+            white-space: nowrap; text-align: right;
+        }
+        .msg-bubble table th { background: rgba(99, 102, 241, 0.12); font-weight: 700; color: var(--text-1); }
+        .msg-bubble table tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+        @media (max-width: 480px) {
+            .msg-bubble table th, .msg-bubble table td { padding: 6px 8px; font-size: 11.5px; }
+        }
 
         .msg-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 10px; color: var(--text-3); }
         .msg-actions { display: flex; gap: 3px; margin-right: auto; }
@@ -325,7 +339,44 @@
         }
         .msg-action-btn:hover { color: var(--accent); }
         .msg-action-btn.stop-btn { background: var(--danger); color: white; animation: pulse 1.5s infinite; }
+        .msg-action-btn.speaking { background: var(--accent); color: white; }
+        .msg-action-btn.pin-btn.pinned { background: var(--warning); color: white; }
+        .msg-action-btn.delete-btn:hover { color: var(--danger); }
+        .msg-bubble.pinned-msg { box-shadow: 0 0 0 2px var(--warning) inset; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+        /* Inline edit mode for a sent (user) message */
+        .msg-edit-textarea {
+            width: 100%; min-height: 60px; resize: vertical; border-radius: 10px; padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.2); color: inherit; border: 1px solid rgba(255, 255, 255, 0.3);
+            font-family: var(--font); font-size: 14px; line-height: 1.6;
+        }
+        .msg-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .msg-edit-btn {
+            padding: 6px 12px; border-radius: 8px; border: none; font-family: var(--font);
+            font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px;
+            transition: opacity 0.2s;
+        }
+        .msg-edit-btn:active { opacity: 0.8; }
+        .msg-edit-btn.save { background: #fff; color: var(--accent); }
+        .msg-edit-btn.cancel { background: rgba(255, 255, 255, 0.18); color: #fff; }
+
+        /* Pinned messages bar under the top bar */
+        .pinned-bar {
+            display: none; gap: 6px; overflow-x: auto; padding: 8px 16px; border-bottom: 1px solid var(--border);
+            background: var(--bg-glass); scrollbar-width: none; flex-shrink: 0;
+        }
+        .pinned-bar::-webkit-scrollbar { display: none; }
+        .pinned-bar.active { display: flex; }
+        .pinned-chip {
+            display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--bg-2);
+            border: 1px solid var(--border-accent); border-radius: 12px; font-size: 11px; color: var(--text-2);
+            white-space: nowrap; cursor: pointer; flex-shrink: 0; max-width: 220px;
+        }
+        .pinned-chip:hover { border-color: var(--warning); }
+        .pinned-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pinned-chip button { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 10px; flex-shrink: 0; }
+        .pinned-chip button:hover { color: var(--danger); }
 
         /* Typing Indicator */
         .typing-indicator { display: none; gap: 10px; max-width: 80%; margin-bottom: 16px; }
@@ -414,9 +465,10 @@
         .attachment-chip {
             display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--bg-2);
             border: 1px solid var(--border-accent); border-radius: 12px; font-size: 11px; color: var(--text-2);
-            margin-bottom: 8px; width: fit-content;
+            margin-bottom: 8px; max-width: 100%;
         }
-        .attachment-chip button { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 12px; }
+        .attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .attachment-chip button { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 12px; flex-shrink: 0; }
 
         /* Modals */
         .modal-overlay {
@@ -526,6 +578,8 @@
                 </div>
             </div>
 
+            <div class="pinned-bar" id="pinnedBar"></div>
+
             <div class="chat-container" id="chatContainer">
                 <div class="welcome-screen" id="welcomeScreen">
                     <div class="welcome-logo"><i class="fas fa-graduation-cap"></i></div>
@@ -586,8 +640,11 @@
                         <option value="auto"> تلقائي</option>
                         <option value="groq">⚡ Groq</option>
                         <option value="gemini">🌟 Gemini</option>
+                        <option value="german-teacher">🇩🇪 معلم الألماني</option>
                         <option value="openrouter">🔀 OpenRouter</option>
                         <option value="cerebras">🧠 Cerebras</option>
+                        <option value="qwen">🐉 Qwen</option>
+                        <option value="zimage">🖼️ تحليل الصور</option>
                         <option value="local">💻 محلي</option>
                     </select>
                 </div>
@@ -616,9 +673,30 @@
                 </div>
                 <button class="btn-calc" onclick="saveBackendUrl()">حفظ</button>
                 <div id="backendStatus" style="margin-top:10px;"></div>
-                <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);text-align:center;font-size:11px;color:var(--text-3);">
-                    تطوير <span style="color:var(--text-2);font-weight:700;">أحمد موسى — 𝐴ℎ𝑚𝑒𝑑 𝑚𝑜𝑢𝑠𝑠𝑎</span>
+            </div>
+
+            <div class="tool-section" id="schoolLoginSection">
+                <div class="tool-title"><i class="fas fa-school"></i> تسجيل الدخول - School X</div>
+                <p style="font-size:11px;color:var(--text-2);margin-bottom:10px;line-height:1.7;">
+                    سجّل دخولك بنفس بيانات منصة School X عشان المساعد يقدر يشوف بياناتك (الدرجات، الحضور، المخالفات...) ويجاوبك بناءً عليها.
+                </p>
+                <div class="input-group">
+                    <input type="text" id="schoolApiUrlInput" class="tool-input" placeholder="رابط سيرفر School X مثل https://schoolx-xxxx.vercel.app">
                 </div>
+                <div id="schoolLoggedOutBox">
+                    <div class="input-group"><input type="text" id="schoolUsernameInput" class="tool-input" placeholder="اسم المستخدم"></div>
+                    <div class="input-group"><input type="password" id="schoolPasswordInput" class="tool-input" placeholder="كلمة المرور"></div>
+                    <button class="btn-calc" onclick="schoolLogin()">تسجيل الدخول</button>
+                </div>
+                <div id="schoolLoggedInBox" style="display:none;">
+                    <div id="schoolLoggedInText" style="font-size:13px;margin-bottom:10px;"></div>
+                    <button class="btn-calc" onclick="schoolLogout()">تسجيل الخروج</button>
+                </div>
+                <div id="schoolLoginStatus" style="margin-top:10px;"></div>
+            </div>
+
+            <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);text-align:center;font-size:11px;color:var(--text-3);">
+                تطوير <span style="color:var(--text-2);font-weight:700;">أحمد موسى — 𝐴ℎ𝑚𝑒𝑑 𝑚𝑜𝑢𝑠𝑠𝑎</span>
             </div>
         </div>
     </div>
@@ -652,12 +730,24 @@
     <script>
         marked.setOptions({ breaks: true, gfm: true });
 
+        function wrapTables(container) {
+            if (!container) return;
+            container.querySelectorAll('table').forEach(tbl => {
+                if (tbl.parentElement && tbl.parentElement.classList.contains('table-wrap')) return;
+                const wrap = document.createElement('div');
+                wrap.className = 'table-wrap';
+                tbl.parentNode.insertBefore(wrap, tbl);
+                wrap.appendChild(tbl);
+            });
+        }
+
         // Runs after a message bubble's final HTML is set. Syntax-highlights every
         // code block and adds a small copy button on top of each one, so code is
         // recognizable at a glance and can be copied without selecting the bot's
         // surrounding explanation text too.
         function enhanceCodeBlocks(bubbleEl) {
             if (!bubbleEl) return;
+            wrapTables(bubbleEl);
             bubbleEl.querySelectorAll('pre code').forEach((codeEl) => {
                 if (codeEl.dataset.enhanced) return;
                 codeEl.dataset.enhanced = '1';
@@ -691,9 +781,226 @@
             });
         }
 
+        // Builds the action buttons (copy / listen / regenerate / pin) under a message bubble.
+        // isLastBotMsg restricts the "regenerate" button to the most recent bot reply only,
+        // since regenerating an older reply would also wipe every message that came after it.
+        function buildMsgActionButtons(msg, actionsDiv, isLastBotMsg) {
+            actionsDiv.innerHTML = '';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'msg-action-btn';
+            copyBtn.title = 'نسخ';
+            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+            copyBtn.addEventListener('click', () => copyToClipboard(msg.content));
+            actionsDiv.appendChild(copyBtn);
+
+            if (msg.role === 'bot') {
+                const speakBtn = document.createElement('button');
+                speakBtn.className = 'msg-action-btn';
+                speakBtn.title = 'سماع الرد';
+                speakBtn.innerHTML = '<i class="fas fa-volume-high"></i>';
+                speakBtn.addEventListener('click', () => speakText(msg.content, speakBtn));
+                actionsDiv.appendChild(speakBtn);
+
+                if (isLastBotMsg) {
+                    const regenBtn = document.createElement('button');
+                    regenBtn.className = 'msg-action-btn regen-btn';
+                    regenBtn.title = 'إعادة توليد الرد';
+                    regenBtn.innerHTML = '<i class="fas fa-rotate-right"></i>';
+                    regenBtn.addEventListener('click', () => regenerateMessage(msg.id));
+                    actionsDiv.appendChild(regenBtn);
+                }
+            }
+
+            if (msg.role === 'user') {
+                const editBtn = document.createElement('button');
+                editBtn.className = 'msg-action-btn';
+                editBtn.title = 'تعديل الرسالة';
+                editBtn.innerHTML = '<i class="fas fa-pen"></i>';
+                editBtn.addEventListener('click', () => enterEditMode(msg.id));
+                actionsDiv.appendChild(editBtn);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'msg-action-btn delete-btn';
+                deleteBtn.title = 'حذف الرسالة';
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                deleteBtn.addEventListener('click', () => deleteMessage(msg.id));
+                actionsDiv.appendChild(deleteBtn);
+            }
+
+            const pinBtn = document.createElement('button');
+            pinBtn.className = 'msg-action-btn pin-btn' + (msg.pinned ? ' pinned' : '');
+            pinBtn.title = msg.pinned ? 'إلغاء التثبيت' : 'تثبيت الرسالة';
+            pinBtn.innerHTML = '<i class="fas fa-thumbtack"></i>';
+            pinBtn.addEventListener('click', () => togglePinMessage(msg.id));
+            actionsDiv.appendChild(pinBtn);
+        }
+
+        // Ensures the "regenerate" button only ever appears on the current last bot reply.
+        // Needed because older bot bubbles keep their DOM around once a new question is asked.
+        function syncRegenerateButtons(chat) {
+            if (!chat) return;
+            const lastBot = [...chat.messages].reverse().find(m => m.role === 'bot');
+            chat.messages.forEach(m => {
+                if (m.role !== 'bot') return;
+                const el = document.getElementById(m.id);
+                if (!el) return;
+                const actionsDiv = el.querySelector('.msg-actions');
+                if (!actionsDiv) return;
+                const regenBtn = actionsDiv.querySelector('.regen-btn');
+                const shouldHave = lastBot && m.id === lastBot.id;
+                if (shouldHave && !regenBtn) {
+                    const btn = document.createElement('button');
+                    btn.className = 'msg-action-btn regen-btn';
+                    btn.title = 'إعادة توليد الرد';
+                    btn.innerHTML = '<i class="fas fa-rotate-right"></i>';
+                    btn.addEventListener('click', () => regenerateMessage(m.id));
+                    const pinBtn = actionsDiv.querySelector('.pin-btn');
+                    if (pinBtn) actionsDiv.insertBefore(btn, pinBtn); else actionsDiv.appendChild(btn);
+                } else if (!shouldHave && regenBtn) {
+                    regenBtn.remove();
+                }
+            });
+        }
+
+        let currentUtterance = null;
+        let currentAudio = null;
+        let currentSpeakBtn = null;
+        let speakToken = 0;
+
+        function resetSpeakBtn() {
+            if (currentSpeakBtn) {
+                currentSpeakBtn.innerHTML = '<i class="fas fa-volume-high"></i>';
+                currentSpeakBtn.classList.remove('speaking');
+            }
+            currentUtterance = null;
+            currentSpeakBtn = null;
+        }
+
+        // Stops whatever is currently speaking, whether it's the /api/tts audio player
+        // or the browser's built-in speechSynthesis fallback. Bumping speakToken also
+        // cancels any in-flight /api/tts fetch so a stale response can't start playing late.
+        function stopSpeaking() {
+            speakToken++;
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.src = '';
+                currentAudio = null;
+            }
+            if (window.speechSynthesis) window.speechSynthesis.cancel();
+            resetSpeakBtn();
+        }
+
+        // Reads a bot reply out loud using the free /api/tts backend route (real speech
+        // audio, works even where the browser has no/poor Arabic voices). Falls back to
+        // speechSynthesis if the API route is unreachable or returns an error. Clicking
+        // the same button again (or another speak button) stops playback first, so only
+        // one message speaks at a time.
+        async function speakText(text, btn) {
+            const wasThisBtn = currentSpeakBtn === btn;
+            stopSpeaking();
+            if (wasThisBtn) return;
+
+            const plain = (text || '')
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/[*_#>`~\-]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!plain) { showToast('لا يوجد نص لقراءته', 'error'); return; }
+
+            const myToken = ++speakToken;
+            currentSpeakBtn = btn;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            btn.classList.add('speaking');
+
+            try {
+                const res = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: plain, lang: 'ar' })
+                });
+                if (myToken !== speakToken) return; // stopped/replaced while we were waiting
+                if (!res.ok) throw new Error('tts-request-failed');
+
+                const blob = await res.blob();
+                if (myToken !== speakToken) return;
+
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                currentAudio = audio;
+                btn.innerHTML = '<i class="fas fa-stop"></i>';
+                const cleanup = () => {
+                    URL.revokeObjectURL(url);
+                    if (currentAudio === audio) {
+                        currentAudio = null;
+                        if (myToken === speakToken) resetSpeakBtn();
+                    }
+                };
+                audio.onended = cleanup;
+                audio.onerror = cleanup;
+                await audio.play();
+            } catch (err) {
+                if (myToken !== speakToken) return;
+                speakWithBrowserFallback(plain, btn, myToken);
+            }
+        }
+
+        // Backup path: the browser's own text-to-speech, used only when /api/tts fails
+        // (e.g. offline, or the free upstream TTS service is temporarily unavailable).
+        function speakWithBrowserFallback(plain, btn, myToken) {
+            if (!('speechSynthesis' in window)) {
+                showToast('تعذّر توليد الصوت، والمتصفح لا يدعم القراءة كبديل', 'error');
+                resetSpeakBtn();
+                return;
+            }
+            const utter = new SpeechSynthesisUtterance(plain);
+            utter.lang = 'ar-SA';
+            const voices = window.speechSynthesis.getVoices();
+            const arVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('ar'));
+            if (arVoice) utter.voice = arVoice;
+            utter.onend = () => { if (myToken === speakToken) resetSpeakBtn(); };
+            utter.onerror = () => { if (myToken === speakToken) resetSpeakBtn(); };
+
+            currentUtterance = utter;
+            btn.innerHTML = '<i class="fas fa-stop"></i>';
+            window.speechSynthesis.speak(utter);
+        }
+
+        // Deletes a bot reply (and anything after it) and asks the current model for a
+        // fresh answer to the same conversation up to that point.
+        async function regenerateMessage(msgId) {
+            if (isGenerating) return;
+            const chat = chats.find(c => c.id === currentChatId);
+            if (!chat) return;
+            const idx = chat.messages.findIndex(m => m.id === msgId);
+            if (idx === -1) return;
+
+            stopSpeaking();
+
+            const removed = chat.messages.splice(idx);
+            removed.forEach(m => {
+                const el = document.getElementById(m.id);
+                if (el) el.remove();
+            });
+            saveData();
+            renderPinnedBar(chat);
+
+            if (abortController) abortController.abort();
+            abortController = new AbortController();
+            isGenerating = true;
+            setSendButtonState(true);
+            document.getElementById('typingIndicator').classList.add('active');
+            scrollToBottom();
+            await runGeneration(chat);
+        }
+
         let chats = JSON.parse(localStorage.getItem('sx_chats')) || [];
         let currentChatId = localStorage.getItem('sx_current_chat') || null;
-        let settings = JSON.parse(localStorage.getItem('sx_settings')) || { theme: 'dark', backendUrl: '', model: 'auto' };
+        let settings = JSON.parse(localStorage.getItem('sx_settings')) || { theme: 'dark', backendUrl: '', model: 'auto', schoolApiUrl: '' };
+        // بيانات ربط School X (مشروع منفصل تماماً بدومين ومتغيرات بيئة مختلفة)
+        let schoolToken = localStorage.getItem('sx_school_token') || null;
+        let schoolUser = JSON.parse(localStorage.getItem('sx_school_user') || 'null');
+        let schoolContext = localStorage.getItem('sx_school_context') || '';
         let isGenerating = false;
         let abortController = null;
         let lastSendTime = 0;
@@ -715,6 +1022,10 @@
             initSpeechRecognition();
             const backendInput = document.getElementById('backendUrlInput');
             if (backendInput) backendInput.value = settings.backendUrl || '';
+            const schoolInput = document.getElementById('schoolApiUrlInput');
+            if (schoolInput) schoolInput.value = settings.schoolApiUrl || '';
+            updateSchoolLoginUI();
+            if (schoolToken) fetchSchoolProfile(); // حدّث بيانات الطالب/الأدمن من السيرفر
         };
 
         function todayKey() {
@@ -836,12 +1147,186 @@
 
             if (!chat || chat.messages.length === 0) {
                 welcome.style.display = 'flex';
+                renderPinnedBar(null);
                 return;
             }
             
             welcome.style.display = 'none';
             chat.messages.forEach(msg => appendMessageToDOM(msg, false));
             scrollToBottom();
+            renderPinnedBar(chat);
+        }
+
+        // Shows a horizontal strip of pinned messages under the top bar, so the user can
+        // jump back to anything important without scrolling through the whole conversation.
+        function renderPinnedBar(chat) {
+            const bar = document.getElementById('pinnedBar');
+            if (!bar) return;
+            const pinned = chat ? chat.messages.filter(m => m.pinned) : [];
+            if (!chat || pinned.length === 0) {
+                bar.innerHTML = '';
+                bar.classList.remove('active');
+                return;
+            }
+            bar.classList.add('active');
+            bar.innerHTML = '';
+            pinned.forEach(m => {
+                const chip = document.createElement('div');
+                chip.className = 'pinned-chip';
+                chip.title = 'اذهب إلى الرسالة';
+                const icon = document.createElement('i');
+                icon.className = m.role === 'user' ? 'fas fa-user' : 'fas fa-thumbtack';
+                chip.appendChild(icon);
+                const label = document.createElement('span');
+                label.textContent = (m.content || '').replace(/\s+/g, ' ').trim().slice(0, 36) || '(بدون نص)';
+                chip.appendChild(label);
+                chip.addEventListener('click', () => {
+                    const el = document.getElementById(m.id);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+                const removeBtn = document.createElement('button');
+                removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+                removeBtn.title = 'إلغاء التثبيت';
+                removeBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePinMessage(m.id); });
+                chip.appendChild(removeBtn);
+                bar.appendChild(chip);
+            });
+        }
+
+        // Toggles the pinned state of a message, keeps the on-screen button/bubble in sync,
+        // and refreshes the pinned bar.
+        function togglePinMessage(msgId) {
+            const chat = chats.find(c => c.id === currentChatId);
+            if (!chat) return;
+            const msg = chat.messages.find(m => m.id === msgId);
+            if (!msg) return;
+            msg.pinned = !msg.pinned;
+            saveData();
+
+            const msgDiv = document.getElementById(msgId);
+            if (msgDiv) {
+                const pinBtn = msgDiv.querySelector('.pin-btn');
+                if (pinBtn) {
+                    pinBtn.classList.toggle('pinned', msg.pinned);
+                    pinBtn.title = msg.pinned ? 'إلغاء التثبيت' : 'تثبيت الرسالة';
+                }
+                const bubbleEl = msgDiv.querySelector('.msg-bubble');
+                if (bubbleEl) bubbleEl.classList.toggle('pinned-msg', msg.pinned);
+            }
+            renderPinnedBar(chat);
+            showToast(msg.pinned ? 'تم تثبيت الرسالة' : 'تم إلغاء تثبيت الرسالة', 'success');
+        }
+
+        // Turns a sent (user) message bubble into an inline textarea so it can be edited
+        // in place. Only the text portion is swapped out — an attached image (if any)
+        // stays visible above it untouched.
+        function enterEditMode(msgId) {
+            if (isGenerating) { showToast('استنى لحظة، البوت لسه بيرد على آخر رسالة', 'error'); return; }
+            const chat = chats.find(c => c.id === currentChatId);
+            const msg = chat && chat.messages.find(m => m.id === msgId);
+            if (!msg) return;
+            const msgDiv = document.getElementById(msgId);
+            const bubble = msgDiv && msgDiv.querySelector('.msg-bubble');
+            const textWrap = bubble && bubble.querySelector('.msg-text');
+            if (!bubble || !textWrap || bubble.dataset.editing) return;
+
+            bubble.dataset.editing = '1';
+            const originalHTML = textWrap.innerHTML;
+            textWrap.innerHTML = '';
+
+            const textarea = document.createElement('textarea');
+            textarea.className = 'msg-edit-textarea';
+            textarea.value = msg.content;
+            textWrap.appendChild(textarea);
+
+            const editActions = document.createElement('div');
+            editActions.className = 'msg-edit-actions';
+
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.className = 'msg-edit-btn save';
+            saveBtn.innerHTML = '<i class="fas fa-check"></i> حفظ وإعادة الإرسال';
+            saveBtn.addEventListener('click', () => saveEditMessage(msgId, textarea.value));
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'msg-edit-btn cancel';
+            cancelBtn.innerHTML = '<i class="fas fa-xmark"></i> إلغاء';
+            cancelBtn.addEventListener('click', () => {
+                delete bubble.dataset.editing;
+                textWrap.innerHTML = originalHTML;
+                enhanceCodeBlocks(bubble);
+            });
+
+            editActions.appendChild(saveBtn);
+            editActions.appendChild(cancelBtn);
+            textWrap.appendChild(editActions);
+
+            textarea.style.height = Math.min(textarea.scrollHeight, 300) + 'px';
+            textarea.focus();
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        }
+
+        // Saves an edited message. Because everything after it in the conversation was a
+        // reply built on the old text, that tail (bot answers, follow-ups...) is removed
+        // and a fresh reply is generated for the edited message — same as regenerateMessage.
+        async function saveEditMessage(msgId, newText) {
+            newText = (newText || '').trim();
+            if (!newText) { showToast('الرسالة لا يمكن أن تكون فارغة', 'error'); return; }
+            if (isGenerating) return;
+
+            const chat = chats.find(c => c.id === currentChatId);
+            if (!chat) return;
+            const idx = chat.messages.findIndex(m => m.id === msgId);
+            if (idx === -1) return;
+
+            stopSpeaking();
+
+            chat.messages[idx].content = newText;
+            const removed = chat.messages.splice(idx + 1);
+            removed.forEach(m => {
+                const el = document.getElementById(m.id);
+                if (el) el.remove();
+            });
+
+            if (idx === 0) chat.title = newText.substring(0, 35) + (newText.length > 35 ? '...' : '');
+
+            saveData();
+            renderChatList();
+            renderChat(currentChatId);
+
+            if (abortController) abortController.abort();
+            abortController = new AbortController();
+            isGenerating = true;
+            setSendButtonState(true);
+            document.getElementById('typingIndicator').classList.add('active');
+            scrollToBottom();
+            await runGeneration(chat);
+        }
+
+        // Deletes a single sent message. Anything after it in the conversation is left as-is.
+        function deleteMessage(msgId) {
+            if (isGenerating) { showToast('استنى لحظة، البوت لسه بيرد على آخر رسالة', 'error'); return; }
+            const chat = chats.find(c => c.id === currentChatId);
+            if (!chat) return;
+            const idx = chat.messages.findIndex(m => m.id === msgId);
+            if (idx === -1) return;
+            if (!confirm('تحذف الرسالة دي؟')) return;
+
+            stopSpeaking();
+
+            chat.messages.splice(idx, 1);
+            const el = document.getElementById(msgId);
+            if (el) el.remove();
+            saveData();
+            renderChatList();
+            renderPinnedBar(chat);
+            syncRegenerateButtons(chat);
+
+            if (chat.messages.length === 0) {
+                document.getElementById('welcomeScreen').style.display = 'flex';
+            }
+            showToast('تم حذف الرسالة', 'success');
         }
 
         function sendQuick(text) {
@@ -861,8 +1346,17 @@
             let text = input.value.trim();
             if ((!text && !pendingAttachment) || isGenerating) return;
 
+            if (pendingAttachment && pendingAttachment.processing && !pendingAttachment.base64) {
+                showToast('استنى لحظة، لسه بيتم استخراج النص من الملف...', 'error');
+                return;
+            }
+
             if (pendingAttachment) {
-                text = text ? `${text}\n\n[مرفق: ${pendingAttachment.name}]\n${pendingAttachment.textContent || ''}` : `[مرفق: ${pendingAttachment.name}]\n${pendingAttachment.textContent || ''}`;
+                const kind = (pendingAttachment.mimeType && pendingAttachment.mimeType.startsWith('image/'))
+                    ? 'image'
+                    : (/\.pdf$/i.test(pendingAttachment.name) ? 'pdf' : 'file');
+                const framed = formatAttachmentForMessage(pendingAttachment.name, pendingAttachment.textContent, kind);
+                text = text ? `${text}\n\n${framed}` : framed;
             }
 
             // Cancel any ongoing request
@@ -897,8 +1391,25 @@
             document.getElementById('typingIndicator').classList.add('active');
             scrollToBottom();
 
-            const model = document.getElementById('modelSelect').value;
+            await runGeneration(chat);
+        }
+
+        // Calls the selected AI provider (with auto-fallback chain) for the given chat and
+        // appends its reply. Shared by sendMessage (new question) and regenerateMessage
+        // (re-asking after deleting the previous bot reply) so both behave identically.
+        async function runGeneration(chat) {
+            let model = document.getElementById('modelSelect').value;
             let source = 'local';
+            const lastUserMsg = [...chat.messages].reverse().find(m => m.role === 'user');
+            const fallbackText = lastUserMsg ? lastUserMsg.content : '';
+            const hasImage = !!(lastUserMsg && lastUserMsg.image && lastUserMsg.image.base64);
+
+            // Groq/OpenRouter/Cerebras/Qwen are text-only — if the user attached a photo,
+            // routing to them would silently ignore it. Force a vision-capable model instead
+            // so an attached image always actually gets looked at.
+            if (hasImage && model !== 'gemini' && model !== 'zimage' && model !== 'german-teacher') {
+                model = 'zimage';
+            }
 
             try {
                 if (model === 'groq') {
@@ -907,16 +1418,37 @@
                 } else if (model === 'gemini') {
                     source = 'gemini';
                     await streamGemini(chat.messages, abortController.signal);
+                } else if (model === 'german-teacher') {
+                    source = 'gemini';
+                    await streamGemini(chat.messages, abortController.signal, GERMAN_TEACHER_SYSTEM_PROMPT);
+                } else if (model === 'zimage') {
+                    source = 'zimage';
+                    await streamZimage(chat.messages, abortController.signal);
                 } else if (model === 'openrouter') {
                     source = 'openrouter';
                     await streamOpenRouter(chat.messages, abortController.signal);
                 } else if (model === 'cerebras') {
                     source = 'cerebras';
                     await streamCerebras(chat.messages, abortController.signal);
+                } else if (model === 'qwen') {
+                    source = 'qwen';
+                    await streamQwen(chat.messages, abortController.signal);
                 } else if (model === 'auto') {
+                    if (hasImage) {
+                        // Image attached in auto mode: try the dedicated vision model first,
+                        // then Gemini (also vision-capable) before giving up on the image.
+                        try {
+                            source = 'zimage';
+                            await streamZimage(chat.messages, abortController.signal);
+                        } catch (zimageError) {
+                            if (zimageError.name === 'AbortError') throw zimageError;
+                            source = 'gemini';
+                            await streamGemini(chat.messages, abortController.signal);
+                        }
+                    } else {
                     // We can't tell from the browser which server-side keys are actually
                     // configured, so auto mode tries providers in order and falls through
-                    // automatically on failure — only dropping to local after all four miss.
+                    // automatically on failure — only dropping to local after all five miss.
                     try {
                         source = 'groq';
                         await streamGroq(chat.messages, abortController.signal);
@@ -932,13 +1464,20 @@
                                 await streamOpenRouter(chat.messages, abortController.signal);
                             } catch (openrouterError) {
                                 if (openrouterError.name === 'AbortError') throw openrouterError;
-                                source = 'cerebras';
-                                await streamCerebras(chat.messages, abortController.signal);
+                                try {
+                                    source = 'cerebras';
+                                    await streamCerebras(chat.messages, abortController.signal);
+                                } catch (cerebrasError) {
+                                    if (cerebrasError.name === 'AbortError') throw cerebrasError;
+                                    source = 'qwen';
+                                    await streamQwen(chat.messages, abortController.signal);
+                                }
                             }
                         }
                     }
+                    }
                 } else {
-                    await respondLocally(text, chat, abortController.signal);
+                    await respondLocally(fallbackText, chat, abortController.signal);
                 }
             } catch (error) {
                 if (error.name === 'AbortError') {
@@ -949,9 +1488,9 @@
                     showToast(shortDetail ? `${shortDetail} — تم استخدام رد محلي` : 'حدث خطأ في الاتصال، تم استخدام رد محلي', 'error');
                     // Only add a local fallback reply if no bot reply was already added for this turn
                     const lastMsg = chat.messages[chat.messages.length - 1];
-                    const alreadyReplied = lastMsg && lastMsg.role === 'bot' && lastMsg.timestamp >= userMsg.timestamp;
+                    const alreadyReplied = lastMsg && lastMsg.role === 'bot' && (!lastUserMsg || lastMsg.timestamp >= lastUserMsg.timestamp);
                     if (!alreadyReplied) {
-                        await respondLocally(text, chat, new AbortController().signal);
+                        await respondLocally(fallbackText, chat, new AbortController().signal);
                     }
                 }
             } finally {
@@ -1043,17 +1582,16 @@
         function finalizeBotMessage(msgDiv, botMsg) {
             const bubbleDiv = msgDiv.querySelector('.msg-bubble');
             bubbleDiv.innerHTML = marked.parse(botMsg.content);
+            bubbleDiv.classList.toggle('pinned-msg', !!botMsg.pinned);
             enhanceCodeBlocks(bubbleDiv);
             const timeSpan = msgDiv.querySelector('.msg-time');
             const sourceSpan = msgDiv.querySelector('.msg-source-icon');
             const actionsDiv = msgDiv.querySelector('.msg-actions');
             timeSpan.textContent = new Date(botMsg.timestamp).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'});
-            sourceSpan.textContent = botMsg.source === 'groq' ? '⚡' : botMsg.source === 'gemini' ? '🌟' : '💻';
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'msg-action-btn';
-            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
-            copyBtn.addEventListener('click', () => copyToClipboard(botMsg.content));
-            actionsDiv.appendChild(copyBtn);
+            sourceSpan.textContent = botMsg.source === 'groq' ? '⚡' : botMsg.source === 'gemini' ? '🌟' : botMsg.source === 'openrouter' ? '🔀' : botMsg.source === 'cerebras' ? '🧠' : botMsg.source === 'qwen' ? '🐉' : botMsg.source === 'zimage' ? '🖼️' : '💻';
+            // This message was just pushed as the newest one, so it's always eligible for regenerate.
+            buildMsgActionButtons(botMsg, actionsDiv, true);
+            syncRegenerateButtons(chats.find(c => c.id === currentChatId));
         }
 
         function appendMessageToDOM(msg, scroll = true) {
@@ -1073,7 +1611,7 @@
             contentDiv.className = 'msg-content';
 
             const bubble = document.createElement('div');
-            bubble.className = 'msg-bubble';
+            bubble.className = 'msg-bubble' + (msg.pinned ? ' pinned-msg' : '');
             if (msg.image && msg.image.base64) {
                 const img = document.createElement('img');
                 img.className = 'msg-image';
@@ -1084,6 +1622,7 @@
                 bubble.appendChild(img);
             }
             const textWrap = document.createElement('div');
+            textWrap.className = 'msg-text';
             textWrap.innerHTML = contentHTML;
             bubble.appendChild(textWrap);
             enhanceCodeBlocks(bubble);
@@ -1097,18 +1636,17 @@
             if (msg.role === 'bot') {
                 const sourceSpan = document.createElement('span');
                 sourceSpan.style.cssText = 'margin-right:6px;opacity:0.6';
-                sourceSpan.textContent = msg.source === 'groq' ? '⚡' : msg.source === 'gemini' ? '🌟' : '💻';
+                sourceSpan.textContent = msg.source === 'groq' ? '⚡' : msg.source === 'gemini' ? '🌟' : msg.source === 'openrouter' ? '🔀' : msg.source === 'cerebras' ? '🧠' : msg.source === 'qwen' ? '🐉' : msg.source === 'zimage' ? '🖼️' : '💻';
                 meta.appendChild(sourceSpan);
-
-                const actionsDiv = document.createElement('div');
-                actionsDiv.className = 'msg-actions';
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'msg-action-btn';
-                copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
-                copyBtn.addEventListener('click', () => copyToClipboard(msg.content));
-                actionsDiv.appendChild(copyBtn);
-                meta.appendChild(actionsDiv);
             }
+
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'msg-actions';
+            const chatForLastCheck = chats.find(c => c.id === currentChatId);
+            const isLastMsg = !!(chatForLastCheck && chatForLastCheck.messages.length > 0 &&
+                chatForLastCheck.messages[chatForLastCheck.messages.length - 1].id === msg.id);
+            buildMsgActionButtons(msg, actionsDiv, msg.role === 'bot' && isLastMsg);
+            meta.appendChild(actionsDiv);
 
             contentDiv.appendChild(bubble);
             contentDiv.appendChild(meta);
@@ -1117,6 +1655,7 @@
             
             container.insertBefore(div, document.getElementById('typingIndicator'));
             if (scroll) scrollToBottom();
+            syncRegenerateButtons(chatForLastCheck);
         }
 
         function createTypewriterQueue(msgDiv, botMsg, signal) {
@@ -1170,7 +1709,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: "openai/gpt-oss-20b",
-                    messages: [{role: "system", content: "أنت مساعد أكاديمي ذكي."}, ...messages.slice(-6).map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
+                    messages: [{role: "system", content: getSystemPrompt()}, ...messages.map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
                     stream: true
                 }),
                 signal
@@ -1243,7 +1782,7 @@
                     // models — it keeps working even as individual free model IDs rotate out,
                     // instead of hardcoding one that might get retired without notice.
                     model: "openrouter/free",
-                    messages: [{role: "system", content: "أنت مساعد أكاديمي ذكي."}, ...messages.slice(-6).map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
+                    messages: [{role: "system", content: getSystemPrompt()}, ...messages.map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
                     stream: true
                 }),
                 signal
@@ -1313,7 +1852,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: "gpt-oss-120b",
-                    messages: [{role: "system", content: "أنت مساعد أكاديمي ذكي."}, ...messages.slice(-6).map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
+                    messages: [{role: "system", content: getSystemPrompt()}, ...messages.map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
                     stream: true
                 }),
                 signal
@@ -1377,17 +1916,109 @@
             saveData();
         }
 
-        async function streamGemini(messages, signal) {
-            const parts = [{ text: messages[messages.length - 1].content }];
-            if (pendingAttachment && pendingAttachment.base64) {
-                parts.push({ inline_data: { mime_type: pendingAttachment.mimeType, data: pendingAttachment.base64 } });
+        async function streamQwen(messages, signal) {
+            const response = await fetch(`${settings.backendUrl}/api/qwen`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: "qwen-plus",
+                    messages: [{role: "system", content: getSystemPrompt()}, ...messages.map(m => ({role: m.role === 'user' ? 'user' : 'assistant', content: m.content}))],
+                    stream: true
+                }),
+                signal
+            });
+
+            if (!response.ok) {
+                let detail = '';
+                try { detail = (await response.text()).slice(0, 200); } catch (e) {}
+                console.error('Qwen API error', response.status, detail);
+                throw new Error(`Qwen API Error (${response.status}): ${detail || 'no detail'}`);
+            }
+
+            document.getElementById('typingIndicator').classList.remove('active');
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const chat = chats.find(c => c.id === currentChatId);
+            const botMsg = { role: 'bot', content: '', source: 'qwen', timestamp: Date.now(), id: `msg-${Date.now()}-b` };
+            chat.messages.push(botMsg);
+
+            const msgDiv = createBotMessageShell(botMsg);
+            const queue = createTypewriterQueue(msgDiv, botMsg, signal);
+            let hasContent = false;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const payload = line.slice(6).trim();
+                    if (payload === '[DONE]') continue;
+                    try {
+                        const data = JSON.parse(payload);
+                        const content = data.choices[0]?.delta?.content || '';
+                        if (content) {
+                            hasContent = true;
+                            queue.push(content);
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            const fullText = await queue.flush();
+
+            if (!hasContent) {
+                // Nothing came back from the API despite a 200 response — fall back locally instead of leaving an empty bubble
+                msgDiv.remove();
+                chat.messages.pop();
+                await respondLocally(messages[messages.length - 1].content, chat, signal);
+                return;
+            }
+
+            finalizeBotMessage(msgDiv, botMsg);
+            saveData();
+        }
+
+        // System prompt for the "معلم الألماني" mode: a professional German teacher
+        // specialized in absolute beginners (A1/A2), explaining in Arabic with German
+        // examples. Sent to Gemini as systemInstruction — never shown in the chat itself.
+        const GERMAN_TEACHER_SYSTEM_PROMPT = `أنت معلّم لغة ألمانية محترف ومتخصص فى تعليم المبتدئين تمامًا (مستوى A1 و A2). اتبع هذه القواعد فى كل رد:
+- اشرح دايمًا بالعربية البسيطة والواضحة، واستخدم الألمانية فقط فى الكلمات والجمل المثال.
+- ابدأ دايمًا من الأساس ولو الطالب مش محدد مستواه: الحروف والنطق، التحية، تقديم النفس، الأرقام، الجمل البسيطة، قبل الانتقال لحاجة أصعب.
+- كل كلمة أو جملة ألمانية جديدة، اكتبها بالشكل ده: الكلمة الألمانية (النطق التقريبي بالعربي) = المعنى بالعربي.
+- اشرح القواعد النحوية (زي أدوات التعريف der/die/das، تصريف الأفعال، ترتيب الجملة) بطريقة مبسطة جدًا وبأمثلة عملية، من غير ما تستخدم مصطلحات لغوية معقدة إلا ولو شرحتها.
+- لما الطالب يكتب جملة أو يحاول يترجم حاجة، صحح غلطه بأسلوب مشجّع ومحترم، ووضح سبب الغلط بشكل مختصر، وإديله الصيغة الصحيحة.
+- بعد كل شرح، اقترح تمرين قصير جدًا (سؤال أو جملة يكملها الطالب) عشان تتأكد إنه فاهم قبل ما تكمل.
+- خلّي أسلوبك صبور، ودود، ومشجّع طول الوقت، ومتدرج فى الصعوبة حسب رد الطالب.
+- لو الطالب سأل سؤال مالوش علاقة باللغة الألمانية، جاوبه بإيجاز ورجّعه بلطف لموضوع تعلم الألمانية.`;
+
+        async function streamGemini(messages, signal, systemPrompt) {
+            const lastUserMsg = [...messages].reverse().find(m => m.role === 'user') || messages[messages.length - 1];
+            const parts = [{ text: lastUserMsg.content }];
+            if (lastUserMsg.image && lastUserMsg.image.base64) {
+                parts.push({ inline_data: { mime_type: lastUserMsg.image.mimeType, data: lastUserMsg.image.base64 } });
+            }
+            // Gemini has no memory of its own between requests — every call is stateless,
+            // so "remembering" earlier parts of the lesson only works if we actually send
+            // them again as history. Send the full conversation every time.
+            const history = messages.slice(0, -1);
+            const requestBody = {
+                contents: history.map(m => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] })).concat([{ role: 'user', parts }])
+            };
+            if (systemPrompt) {
+                requestBody.systemInstruction = { parts: [{ text: systemPrompt }] };
             }
             const response = await fetch(`${settings.backendUrl}/api/gemini`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: messages.slice(-6, -1).map(m => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] })).concat([{ role: 'user', parts }])
-                }),
+                body: JSON.stringify(requestBody),
                 signal
             });
 
@@ -1437,7 +2068,94 @@
             if (!hasContent) {
                 msgDiv.remove();
                 chat.messages.pop();
-                await respondLocally(messages[messages.length - 1].content, chat, signal);
+                await respondLocally(lastUserMsg.content, chat, signal);
+                return;
+            }
+
+            finalizeBotMessage(msgDiv, botMsg);
+            saveData();
+        }
+
+        // Sends the last user message (with its attached image, if any) to the vision-capable
+        // model behind /api/zimage and streams back an analysis/answer about it. Falls back to
+        // plain text if no image is attached, so picking this model still works normally.
+        async function streamZimage(messages, signal) {
+            const lastUserMsg = [...messages].reverse().find(m => m.role === 'user') || messages[messages.length - 1];
+            const userContent = (lastUserMsg.image && lastUserMsg.image.base64)
+                ? [
+                      { type: 'text', text: lastUserMsg.content || 'صف هذه الصورة بالتفصيل وحلل محتواها.' },
+                      { type: 'image_url', image_url: { url: `data:${lastUserMsg.image.mimeType};base64,${lastUserMsg.image.base64}` } }
+                  ]
+                : lastUserMsg.content;
+
+            const historyMessages = messages.slice(0, -1)
+                .filter(m => m.role === 'user' || m.role === 'bot')
+                .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
+
+            const response = await fetch(`${settings.backendUrl}/api/zimage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: "qwen-vl-max",
+                    messages: [
+                        { role: "system", content: getSystemPrompt("أنت مساعد أكاديمي ذكي قادر على تحليل الصور المرفوعة بدقة ووصف محتواها والإجابة عن أي سؤال متعلق بها.") },
+                        ...historyMessages,
+                        { role: "user", content: userContent }
+                    ],
+                    stream: true
+                }),
+                signal
+            });
+
+            if (!response.ok) {
+                let detail = '';
+                try { detail = (await response.text()).slice(0, 200); } catch (e) {}
+                console.error('Z-Image API error', response.status, detail);
+                throw new Error(`Z-Image API Error (${response.status}): ${detail || 'no detail'}`);
+            }
+
+            document.getElementById('typingIndicator').classList.remove('active');
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const chat = chats.find(c => c.id === currentChatId);
+            const botMsg = { role: 'bot', content: '', source: 'zimage', timestamp: Date.now(), id: `msg-${Date.now()}-b` };
+            chat.messages.push(botMsg);
+            const msgDiv = createBotMessageShell(botMsg);
+            const queue = createTypewriterQueue(msgDiv, botMsg, signal);
+            let hasContent = false;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const payload = line.slice(6).trim();
+                    if (payload === '[DONE]') continue;
+                    try {
+                        const data = JSON.parse(payload);
+                        const content = data.choices[0]?.delta?.content || '';
+                        if (content) {
+                            hasContent = true;
+                            queue.push(content);
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            const fullText = await queue.flush();
+
+            if (!hasContent) {
+                msgDiv.remove();
+                chat.messages.pop();
+                await respondLocally(lastUserMsg.content, chat, signal);
                 return;
             }
 
@@ -1621,6 +2339,122 @@
             showToast('تم الحفظ', 'success');
         }
 
+        // ====================== ربط School X (مشروع منفصل - سيرفر تاني) ======================
+        function getSchoolApiUrl() {
+            const input = document.getElementById('schoolApiUrlInput');
+            const url = (input ? input.value : settings.schoolApiUrl || '').trim().replace(/\/+$/, '');
+            return url;
+        }
+
+        function updateSchoolLoginUI() {
+            const loggedOutBox = document.getElementById('schoolLoggedOutBox');
+            const loggedInBox = document.getElementById('schoolLoggedInBox');
+            const loggedInText = document.getElementById('schoolLoggedInText');
+            if (!loggedOutBox || !loggedInBox) return;
+            if (schoolToken && schoolUser) {
+                loggedOutBox.style.display = 'none';
+                loggedInBox.style.display = 'block';
+                loggedInText.innerHTML = `مسجّل دخول باسم: <b>${schoolUser.fullName || schoolUser.username}</b> (${schoolUser.type === 'admin' ? 'أدمن' : 'طالب'})`;
+            } else {
+                loggedOutBox.style.display = 'block';
+                loggedInBox.style.display = 'none';
+            }
+        }
+
+        async function schoolLogin() {
+            const apiUrl = getSchoolApiUrl();
+            const username = document.getElementById('schoolUsernameInput').value.trim();
+            const password = document.getElementById('schoolPasswordInput').value;
+            const status = document.getElementById('schoolLoginStatus');
+            if (!apiUrl) { status.innerHTML = '<span style="color:var(--danger)">حط رابط سيرفر School X الأول</span>'; return; }
+            if (!username || !password) { status.innerHTML = '<span style="color:var(--danger)">اكتب اسم المستخدم وكلمة المرور</span>'; return; }
+            settings.schoolApiUrl = apiUrl;
+            saveData();
+            status.innerHTML = 'جاري تسجيل الدخول...';
+            try {
+                const res = await fetch(`${apiUrl}/api/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    status.innerHTML = `<span style="color:var(--danger)">${data.error || 'فشل تسجيل الدخول'}</span>`;
+                    return;
+                }
+                schoolToken = data.token;
+                schoolUser = data.user;
+                localStorage.setItem('sx_school_token', schoolToken);
+                localStorage.setItem('sx_school_user', JSON.stringify(schoolUser));
+                document.getElementById('schoolPasswordInput').value = '';
+                status.innerHTML = '<span style="color:var(--success)">تم تسجيل الدخول ✓</span>';
+                updateSchoolLoginUI();
+                await fetchSchoolProfile();
+                showToast('تم ربط حسابك بمنصة School X', 'success');
+            } catch (e) {
+                status.innerHTML = '<span style="color:var(--danger)">تعذر الاتصال بالسيرفر — تأكد من الرابط</span>';
+            }
+        }
+
+        function schoolLogout() {
+            schoolToken = null;
+            schoolUser = null;
+            schoolContext = '';
+            localStorage.removeItem('sx_school_token');
+            localStorage.removeItem('sx_school_user');
+            localStorage.removeItem('sx_school_context');
+            updateSchoolLoginUI();
+            showToast('تم تسجيل الخروج من School X', 'success');
+        }
+
+        // بيجيب بيانات المستخدم كاملة من سيرفر School X وبيبني منها ملخص نصي
+        // بيتحط كـ "سياق" جوه الـ system prompt عشان المساعد يعرف يجاوب عليه
+        async function fetchSchoolProfile() {
+            const apiUrl = settings.schoolApiUrl || getSchoolApiUrl();
+            if (!apiUrl || !schoolToken) return;
+            try {
+                const res = await fetch(`${apiUrl}/api/me`, {
+                    headers: { 'Authorization': `Bearer ${schoolToken}` }
+                });
+                if (res.status === 401) { schoolLogout(); return; }
+                const data = await res.json();
+                if (!res.ok) return;
+                schoolContext = buildSchoolContextText(data);
+                localStorage.setItem('sx_school_context', schoolContext);
+            } catch (e) { /* السيرفر مش متاح دلوقتي، هنستخدم آخر نسخة متخزنة */ }
+        }
+
+        function buildSchoolContextText(data) {
+            if (data.type === 'admin') {
+                const a = data.profile;
+                return `المستخدم مسجل دخوله كأدمن في منصة School X.\nالاسم: ${a.fullName}\nاسم المستخدم: ${a.username}`;
+            }
+            const s = data.profile;
+            let text = `المستخدم مسجل دخوله كطالب في منصة School X، وده بياناته الحقيقية من السيرفر (استخدمها في إجاباتك لو سأل عن نفسه):\n`;
+            text += `الاسم: ${s.fullName}\nكود الطالب: ${s.studentCode}\nالصف: ${s.grade}\n`;
+            if (s.subjects && s.subjects.length) text += `المواد: ${s.subjects.join('، ')}\n`;
+            if (data.examResults && data.examResults.length) {
+                text += `\nنتائج آخر اختبارات:\n` + data.examResults.slice(0, 10).map(r => `- كود الاختبار ${r.examCode}: ${r.score}`).join('\n') + '\n';
+            }
+            if (data.attendance && data.attendance.length) {
+                const present = data.attendance.filter(x => x.status === 'present').length;
+                const absent = data.attendance.filter(x => x.status === 'absent').length;
+                const late = data.attendance.filter(x => x.status === 'late').length;
+                text += `\nملخص الحضور (آخر ${data.attendance.length} سجل): حاضر ${present} - غايب ${absent} - متأخر ${late}\n`;
+            }
+            if (data.violations && data.violations.length) {
+                text += `\nمخالفات مسجلة (${data.violations.length}):\n` + data.violations.slice(0, 10).map(v => `- ${v.type || ''}: ${v.reason || ''}`).join('\n') + '\n';
+            }
+            return text;
+        }
+
+        // بيتضاف قبل الـ system prompt الثابت في كل نداء للـ AI
+        function getSystemPrompt(base) {
+            base = base || 'أنت مساعد أكاديمي ذكي.';
+            if (schoolContext) return `${base}\n\n${schoolContext}`;
+            return base;
+        }
+
         function calculatePercentage() {
             const v = parseFloat(document.getElementById('percValue').value);
             const t = parseFloat(document.getElementById('percTotal').value);
@@ -1640,29 +2474,153 @@
             resDiv.classList.add('show');
         }
 
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+
+        // Tracks the upload "session" so a stale async extraction (PDF/OCR) can't
+        // overwrite a newer attachment or resurrect one the user already removed.
+        let attachmentToken = 0;
+
+        async function extractPdfText(file, onStatus) {
+            const buffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+            // Large/"ضخمة" PDFs: read up to 80 pages and up to ~25k characters — enough for
+            // most textbooks/chapters — instead of bailing out early on big files.
+            const TEXT_CHAR_CAP = 25000;
+            const maxPages = Math.min(pdf.numPages, 80);
+            let text = '';
+            for (let i = 1; i <= maxPages; i++) {
+                if (onStatus && maxPages > 8 && (i % 5 === 0 || i === maxPages)) {
+                    onStatus(`جارٍ استخراج النص... صفحة ${i} من ${maxPages}`);
+                }
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                text += content.items.map(it => it.str).join(' ') + '\n';
+                if (text.length > TEXT_CHAR_CAP) break;
+            }
+            text = text.trim();
+
+            // A real text layer came back — most PDFs (Word exports, typed docs, etc).
+            if (text.replace(/\s/g, '').length >= 30) {
+                const truncated = text.length > TEXT_CHAR_CAP;
+                const out = text.slice(0, TEXT_CHAR_CAP);
+                return truncated ? `${out}\n\n[...تم اقتطاع باقي النص لأن الملف طويل جدًا...]` : out;
+            }
+
+            // Almost nothing extracted — this is a scanned/image-based PDF with no text
+            // layer, which is exactly the case that used to fail outright. Instead of
+            // giving up, render each page to a canvas and run OCR on the image, the same
+            // way we already do for uploaded photos.
+            if (!window.Tesseract) throw new Error('empty');
+
+            const OCR_CHAR_CAP = 25000;
+            const ocrPages = Math.min(pdf.numPages, 15); // OCR is slow client-side — cap pages
+            let ocrText = '';
+            for (let i = 1; i <= ocrPages; i++) {
+                if (onStatus) onStatus(`الملف صورة ممسوحة ضوئيًا، جارٍ تحليل صفحة ${i} من ${ocrPages} بالـ OCR...`);
+                const page = await pdf.getPage(i);
+                const viewport = page.getViewport({ scale: 2 });
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                const ctx = canvas.getContext('2d');
+                await page.render({ canvasContext: ctx, viewport }).promise;
+                try {
+                    const { data } = await Tesseract.recognize(canvas, 'ara+eng');
+                    ocrText += (data.text || '') + '\n';
+                } catch (e) {}
+                if (ocrText.length > OCR_CHAR_CAP) break;
+            }
+            ocrText = ocrText.trim();
+            if (!ocrText) throw new Error('empty');
+            const truncated = ocrText.length > OCR_CHAR_CAP;
+            const out = ocrText.slice(0, OCR_CHAR_CAP);
+            return truncated ? `${out}\n\n[...تم اقتطاع باقي النص لأن الملف طويل جدًا...]` : out;
+        }
+
+        // Cleans up raw extracted text (collapses repeated spaces/blank lines from PDF/OCR
+        // extraction) and wraps it in a clearly delimited, nicely formatted block so both the
+        // AI model and the person reading the chat can tell exactly what came from the file.
+        function formatAttachmentForMessage(name, textContent, kind) {
+            const cleaned = (textContent || '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            const icon = kind === 'pdf' ? '📄' : kind === 'image' ? '🖼️' : '📎';
+            const label = kind === 'pdf' ? 'ملف PDF' : kind === 'image' ? 'صورة' : 'ملف';
+            const body = cleaned || '(لم يتم العثور على نص قابل للقراءة في الملف)';
+            return `${icon} **مرفق (${label}): ${name}**\n> تم استخراج النص التالي تلقائيًا وتنسيقه:\n\n---\n${body}\n---`;
+        }
+
         function handleFileUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
 
             const isText = /\.(txt|md)$/i.test(file.name) || file.type.startsWith('text/');
             const isImage = file.type.startsWith('image/');
+            const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+            const myToken = ++attachmentToken;
 
             if (isText) {
                 const reader = new FileReader();
                 reader.onload = () => {
+                    if (myToken !== attachmentToken) return;
                     pendingAttachment = { name: file.name, textContent: reader.result.slice(0, 6000) };
                     showAttachmentChip();
                     showToast(`تم إرفاق: ${file.name}`, 'success');
                 };
                 reader.onerror = () => showToast('تعذرت قراءة الملف', 'error');
                 reader.readAsText(file);
+            } else if (isPdf) {
+                pendingAttachment = { name: file.name, processing: true, status: 'جارٍ استخراج النص من الـ PDF...' };
+                showAttachmentChip();
+                extractPdfText(file, (status) => {
+                    if (myToken !== attachmentToken || !pendingAttachment) return;
+                    pendingAttachment.status = status;
+                    showAttachmentChip();
+                }).then(text => {
+                    if (myToken !== attachmentToken) return;
+                    pendingAttachment = { name: file.name, textContent: text };
+                    showAttachmentChip();
+                    showToast(`تم تحليل الملف: ${file.name}`, 'success');
+                }).catch(() => {
+                    if (myToken !== attachmentToken) return;
+                    pendingAttachment = { name: file.name };
+                    showAttachmentChip();
+                    showToast('تعذر استخراج أي نص من هذا الملف حتى بعد محاولة الـ OCR', 'error');
+                });
             } else if (isImage) {
                 const reader = new FileReader();
                 reader.onload = () => {
+                    if (myToken !== attachmentToken) return;
                     const base64 = reader.result.split(',')[1];
-                    pendingAttachment = { name: file.name, base64, mimeType: file.type };
+                    pendingAttachment = {
+                        name: file.name, base64, mimeType: file.type,
+                        processing: true, status: 'جارٍ تحليل النص داخل الصورة...'
+                    };
                     showAttachmentChip();
-                    showToast(`تم إرفاق: ${file.name} (يعمل فقط مع Gemini)`, 'success');
+                    showToast(`تم إرفاق: ${file.name}`, 'success');
+
+                    if (window.Tesseract) {
+                        Tesseract.recognize(file, 'ara+eng').then(({ data }) => {
+                            if (myToken !== attachmentToken || !pendingAttachment) return;
+                            const ocrText = (data.text || '').trim();
+                            pendingAttachment.textContent = ocrText.slice(0, 6000);
+                            pendingAttachment.processing = false;
+                            pendingAttachment.status = ocrText ? 'تم استخراج النص من الصورة ✓' : 'لم يتم العثور على نص في الصورة';
+                            showAttachmentChip();
+                        }).catch(() => {
+                            if (myToken !== attachmentToken || !pendingAttachment) return;
+                            pendingAttachment.processing = false;
+                            pendingAttachment.status = null;
+                            showAttachmentChip();
+                        });
+                    } else {
+                        pendingAttachment.processing = false;
+                        pendingAttachment.status = null;
+                        showAttachmentChip();
+                    }
                 };
                 reader.onerror = () => showToast('تعذرت قراءة الملف', 'error');
                 reader.readAsDataURL(file);
@@ -1681,8 +2639,10 @@
             chip = document.createElement('div');
             chip.className = 'attachment-chip';
             chip.id = 'attachmentChip';
-            chip.innerHTML = `<i class="fas fa-paperclip"></i><span></span>`;
-            chip.querySelector('span').textContent = pendingAttachment.name;
+            const icon = pendingAttachment.processing ? 'fa-spinner fa-spin' : 'fa-paperclip';
+            chip.innerHTML = `<i class="fas ${icon}"></i><span></span>`;
+            const label = pendingAttachment.status ? `${pendingAttachment.name} — ${pendingAttachment.status}` : pendingAttachment.name;
+            chip.querySelector('span').textContent = label;
             const removeBtn = document.createElement('button');
             removeBtn.innerHTML = '<i class="fas fa-times"></i>';
             removeBtn.addEventListener('click', clearAttachment);
@@ -1692,6 +2652,7 @@
         }
 
         function clearAttachment() {
+            attachmentToken++;
             pendingAttachment = null;
             const chip = document.getElementById('attachmentChip');
             if (chip) chip.remove();
